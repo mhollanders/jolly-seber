@@ -1,0 +1,377 @@
+/** 
+ * Jolly-Seber robust design pointwise log PMF using the forward algorithm. 
+ * Function is overloaded:
+ *   1. (J - 1)-vector phi and J-vector p
+ *   2. (J - 1)-vector phi and K * J matrix p
+ *   3. (J - 1) * I matrix phi and I-array of K * J matrices p
+ * 
+ * @param y      Detection history
+ * @param f, l   First and last primary detected
+ * @param K      Number of secondaries
+ * @param psi    Inclusion probability
+ * @param beta   Entry probabilities
+ * @param phi    Survival probabilities
+ * @param p      Detection probabilities
+ *
+ * @return log_lik   Log-likelihoods of observed
+ * @return log_lik0  Log-likelihood of augmented inclusion states
+ * @return Omega     Foward algorithm states of observed
+ * @return Omega0    Foward algorithm states of augmented
+ * @return theta     Marginal entry occasions of observed
+ * @return theta0    Marginal entry occasion of augmented
+ */
+tuple(vector, vector, array[] matrix, array[] matrix, matrix, vector) 
+  js_rd(data array[,,] int y, data array[] int f, data array[] int l, 
+        data array[] int K, real psi, vector beta, vector phi, vector p) {
+  
+  // parameters and log TPMs
+  int I = size(y), J = size(y[1]), K_max = max(K);
+  real log_psi = log(psi), log1m_psi = log1m(psi);
+  vector[J - 1] log_phi = log(phi), log1m_phi = log1m(phi);
+  vector[J] log_p = log(p), log1m_p = log1m(p);
+  array[J - 1] matrix[2, 2] P_z;
+  for (j in 1:(J - 1)) {
+    P_z[j] = [[ log_phi[j], log1m_phi[j] ],
+              [ negative_infinity(), 0 ]];
+  }
+  array[J] matrix[2, 2] P_y;
+  for (j in 1:J) {
+    P_y[j] = [[ log_p[j], log1m_p[j] ],
+              [ 0, negative_infinity() ]];
+  }
+  
+  // forward algorithm for observed individuals
+  matrix[J, I] theta;
+  array[I] matrix[2, J] Omega;
+  vector[I] log_lik = rep_vector(log_psi, I);
+  for (i in 1:I) {
+    for (j in 1:f[i]) {
+      theta[j, i] = categorical_lpmf(j | beta) 
+                    + sum(P_y[j][1, y[i, j, 1:K[j]]]);
+      for (jj in (j + 1):f[i]) {
+        theta[j, i] += P_z[jj - 1][1, 1] + sum(P_y[jj][1, y[i, j, 1:K[j]]]);
+      }
+    }
+    Omega[i][1, f[i]] = log_sum_exp(theta[1:f[i], i]);
+    for (j in (f[i] + 1):l[i]) {
+      Omega[i][1, j] = Omega[i][1, j - 1] + P_z[j - 1][1, 1]
+                       + sum(P_y[j][1, y[i, j, 1:K[j]]]);
+    }
+    Omega[i][2, l[i]] = negative_infinity();
+    for (j in (l[i] + 1):J) {
+      Omega[i][:, j] = log_prod_exp(P_z[j - 1]', Omega[i][:, j - 1])
+                       + P_y[j][:, 1] * K[j];
+    }
+    log_lik[i] += log_sum_exp(Omega[i][:, J]);
+  }
+  
+  // augmented individuals
+  vector[J] theta0;
+  array[J] matrix[2, J] Omega0;
+  for (j in 1:J) {
+    Omega0[j][1, j] = categorical_lpmf(j | beta) + P_y[j][1, 1] * K[j];
+    Omega0[j][2, j] = negative_infinity();
+    for (jj in (j + 1):J) {
+      Omega0[j][:, jj] = log_prod_exp(P_z[jj - 1]', Omega0[j][:, jj - 1])
+                         + P_y[j][1, 1] * K[j];
+    }
+    theta0[j] = log_sum_exp(Omega0[j][:, J]);
+  }
+  vector[2] log_lik0 = [ log1m_psi, log_psi + log_sum_exp(theta0) ]';
+                                         
+  return (log_lik, log_lik0, Omega, Omega0, theta, theta0);
+}
+
+tuple(vector, vector, array[] matrix, array[] matrix, matrix, vector) 
+  js_rd(data array[,,] int y, data array[] int f, data array[] int l, 
+        data array[] int K, real psi, vector beta, vector phi, matrix p) {
+  
+  // parameters and log TPMs
+  int I = size(y), J = size(y[1]), K_max = max(K);
+  real log_psi = log(psi), log1m_psi = log1m(psi);
+  vector[J - 1] log_phi = log(phi), log1m_phi = log1m(phi);
+  matrix[K_max, J] log_p = log(p), log1m_p = log1m(p);
+  array[J - 1] matrix[2, 2] P_z;
+  for (j in 1:(J - 1)) {
+    P_z[j] = [[ log_phi[j], log1m_phi[j] ],
+              [ negative_infinity(), 0 ]];
+  }
+  array[J, K_max] matrix[2, 2] P_y;
+  for (j in 1:J) {
+    for (k in 1:K[j]) {
+      P_y[j, k] = [[ log_p[k, j], log1m_p[k, j] ],
+                   [ 0, negative_infinity() ]];
+    }
+  }
+  
+  // forward algorithm for observed individuals
+  matrix[J, I] theta;
+  array[I] matrix[2, J] Omega;
+  vector[I] log_lik = rep_vector(log_psi, I);
+  for (i in 1:I) {
+    for (j in 1:f[i]) {
+      theta[j, i] = categorical_lpmf(j | beta);
+      for (k in 1:K[j]) {
+        theta[j, i] += P_y[j, k][1, y[i, j, k]];
+      }
+      for (jj in (j + 1):f[i]) {
+        theta[j, i] += P_z[jj - 1][1, 1];
+        for (k in 1:K[jj]) {
+          theta[j, i] += P_y[jj, k][1, y[i, jj, k]];
+        }
+      }
+    }
+    Omega[i][1, f[i]] = log_sum_exp(theta[1:f[i], i]);
+    for (j in (f[i] + 1):l[i]) {
+      Omega[i][1, j] = Omega[i][1, j - 1] + P_z[j - 1][1, 1];
+      for (k in 1:K[j]) {
+        Omega[i][1, j] += P_y[j, k][1, y[i, j, k]];
+      }
+    }
+    Omega[i][2, l[i]] = negative_infinity();
+    for (j in (l[i] + 1):J) {
+      Omega[i][:, j] = log_prod_exp(P_z[j - 1]', Omega[i][:, j - 1]);
+      for (k in 1:K[j]) {
+        Omega[i][:, j] += P_y[j, k][:, 1];
+      }
+    }
+    log_lik[i] += log_sum_exp(Omega[i][:, J]);
+  }
+  
+  // augmented individuals
+  vector[J] theta0;
+  array[J] matrix[2, J] Omega0;
+  for (j in 1:J) {
+    Omega0[j][1, j] = categorical_lpmf(j | beta);
+    for (k in 1:K[j]) {
+      Omega0[j][1, j] += P_y[j, k][1, 1];
+    }
+    Omega0[j][2, j] = negative_infinity();
+    for (jj in (j + 1):J) {
+      Omega0[j][:, jj] = log_prod_exp(P_z[jj - 1]', Omega0[j][:, jj - 1]);
+      for (k in 1:K[jj]) {
+        Omega0[j][:, jj] += P_y[jj, k][:, 1];
+      }
+    }
+    theta0[j] = log_sum_exp(Omega0[j][:, J]);
+  }
+  vector[2] log_lik0 = [ log1m_psi, log_psi + log_sum_exp(theta0) ]';
+                                         
+  return (log_lik, log_lik0, Omega, Omega0, theta, theta0);
+}
+
+tuple(vector, matrix, array[] matrix, array[,] matrix, matrix, matrix) 
+  js_rd(data array[,,] int y, data array[] int f, data array[] int l, 
+        data array[] int K, real psi, vector beta, matrix phi, 
+        array[] matrix p) {
+  
+  // parameters
+  int I = size(y), I_all = cols(phi), I_aug = I_all - I,J = size(y[1]), 
+      K_max = max(K);
+  real log_psi = log(psi), log1m_psi = log1m(psi);
+  matrix[J - 1, I_all] log_phi = log(phi), log1m_phi = log1m(phi);
+  array[I_all] matrix[K_max, J] log_p = log(p), log1m_p = log1m(p);
+  
+  // log TPMs
+  array[I_all, J - 1] matrix[2, 2] P_z;
+  array[I_all, J, K_max] matrix[2, 2] P_y;
+  for (i in 1:I_all) {
+    for (j in 1:(J - 1)) {
+      P_z[i, j] = [[ log_phi[j, i], log1m_phi[j, i] ],
+                   [ negative_infinity(), 0 ]];
+    }
+    for (j in 1:J) {
+      for (k in 1:K[j]) {
+        P_y[i, j, k] = [[ log_p[i][k, j], log1m_p[i][k, j] ],
+                        [ 0, negative_infinity() ]];
+      }
+    }
+  }
+  
+  // forward algorithm for observed individuals
+  matrix[J, I] theta;
+  array[I] matrix[2, J] Omega;
+  vector[I] log_lik = rep_vector(log_psi, I);
+  for (i in 1:I) {
+    for (j in 1:f[i]) {
+      theta[j, i] = categorical_lpmf(j | beta);
+      for (k in 1:K[j]) {
+        theta[j, i] += P_y[i, j, k][1, y[i, j, k]];
+      }
+      for (jj in (j + 1):f[i]) {
+        theta[j, i] += P_z[i, jj - 1][1, 1];
+        for (k in 1:K[jj]) {
+          theta[j, i] += P_y[i, jj, k][1, y[i, jj, k]];
+        }
+      }
+    }
+    Omega[i][1, f[i]] = log_sum_exp(theta[1:f[i], i]);
+    for (j in (f[i] + 1):l[i]) {
+      Omega[i][1, j] = Omega[i][1, j - 1] + P_z[i, j - 1][1, 1];
+      for (k in 1:K[j]) {
+        Omega[i][1, j] += P_y[i, j, k][1, y[i, j, k]];
+      }
+    }
+    Omega[i][2, l[i]] = negative_infinity();
+    for (j in (l[i] + 1):J) {
+      Omega[i][:, j] = log_prod_exp(P_z[i, j - 1]', Omega[i][:, j - 1]);
+      for (k in 1:K[j]) {
+        Omega[i][:, j] += P_y[i, j, k][:, 1];
+      }
+    }
+    log_lik[i] += log_sum_exp(Omega[i][:, J]);
+  }
+  
+  // augmented individuals
+  matrix[J, I_aug] theta0;
+  array[I_aug, J] matrix[2, J] Omega0;
+  matrix[2, I_aug] log_lik0;
+  for (i in 1:I_aug) {
+    for (j in 1:J) {
+      Omega0[i, j][1, j] = categorical_lpmf(j | beta);
+      for (k in 1:K[j]) {
+        Omega0[i, j][1, j] += P_y[i, j, k][1, 1];
+      }
+      Omega0[i, j][2, j] = negative_infinity();
+      for (jj in (j + 1):J) {
+        Omega0[i, j][:, jj] = log_prod_exp(P_z[i, jj - 1]', 
+                                           Omega0[i, j][:, jj - 1]);
+        for (k in 1:K[jj]) {
+          Omega0[i, j][:, jj] += P_y[i, jj, k][:, 1];
+        }
+      }
+      theta0[j, i] = log_sum_exp(Omega0[i, j][:, J]);
+    }
+    log_lik0[:, i] = [ log1m_psi, log_psi + log_sum_exp(theta0[:, i]) ]';
+  }
+                                         
+  return (log_lik, log_lik0, Omega, Omega0, theta, theta0);
+}
+/** 
+ * Jolly-Seber robust design population sizes, number of entries, and 
+ * superpopulation using the backward sampling algorithm. Function is 
+ * overloaded:
+ *   1. (J - 1)-vector phi
+ *   2. (J - 1) * I matrix phi
+ * 
+ * @param lp     Output of js_robust_design()
+ * @param f, l   First and last primary detected
+ * @param phi    Survival probabilities
+ 
+ * @return N        Population size per primary
+ * @return B        Number of entries per primary
+ * @return N_super  Super-population
+ */
+tuple(array[] int, array[] int, int) 
+  js_rd_rng(tuple(vector, vector, array[] matrix, array[] matrix, matrix, 
+                  vector) lp, array[] int f, array[] int l, int I_aug, 
+            vector phi) {
+  
+  int I = size(lp.1), J = rows(lp.5), I_all = I + I_aug;
+  vector[J - 1] log1m_phi = log1m(phi);
+  array[I_all] int b = zeros_int_array(I_all);
+  array[I_all, J] int z = rep_array(0, I_all, J);
+  array[J] int N = zeros_int_array(J), B = zeros_int_array(J);
+  int N_super = I;
+
+  // observed
+  for (i in 1:I) {
+    b[i] = latent_rng(lp.5[1:f[i], i]);
+    z[i, J] = latent_rng(lp.3[i][:, J]);
+    for (j in (l[i] + 1):(J - 1)) {
+      int jj = J + l[i] - j;
+      z[i, jj] = (z[i, jj + 1] == 1) ? 
+                 1 : latent_rng(lp.3[i][:, jj] + [ log1m_phi[jj], 0 ]');
+    }
+    z[i, b[i]:l[i]] = ones_int_array(l[i] - b[i] + 1);
+  }
+  
+  // augmented
+  for (i in (I + 1):I_all) {
+    int w = latent_rng(lp.2) - 1;
+    if (w) {
+      b[i] = latent_rng(lp.6);
+      z[i, b[i]] = 1;
+      if (b[i] < J) {
+        z[i, J] = latent_rng(lp.4[b[i]][:, J]);
+        for (j in (b[i] + 1):(J - 1)) {
+        int jj = J + b[i] - j;
+        z[i, jj] = (z[i, jj + 1] == 1) ? 
+                   1 : latent_rng(lp.4[b[i]][:, jj] + [ log1m_phi[jj], 0 ]');
+        }
+      }
+    }
+    N_super += w;
+    if (N_super == I_all) {
+      print("N_super == I + I_aug. Increase I_aug and try again.");
+    }
+  }
+  for (i in 1:I_all) {
+    if (b[i]) {
+      B[b[i]] += 1;
+      for (j in b[i]:J) {
+        N[j] += z[i, j] == 1;
+      }
+    }
+  }
+  
+  return (N, B, N_super);
+}
+
+tuple(array[] int, array[] int, int) 
+  js_rd_rng(tuple(vector, matrix, array[] matrix, array[,] matrix, matrix, 
+                  matrix) lp, array[] int f, array[] int l, matrix phi) {
+  
+  int I = size(lp.1), I_aug = cols(lp.2), J = rows(lp.5), I_all = I + I_aug;
+  matrix[J - 1, I] log1m_phi = log1m(phi);
+  array[I_all] int b = zeros_int_array(I_all);
+  array[I_all, J] int z = rep_array(0, I_all, J);
+  array[J] int N = zeros_int_array(J), B = zeros_int_array(J);
+  int N_super = I;
+
+  // observed
+  for (i in 1:I) {
+    b[i] = latent_rng(lp.5[1:f[i], i]);
+    z[i, J] = latent_rng(lp.3[i][:, J]);
+    for (j in (l[i] + 1):(J - 1)) {
+      int jj = J + l[i] - j;
+      z[i, jj] = (z[i, jj + 1] == 1) ? 
+                 1 : latent_rng(lp.3[i][:, jj] + [ log1m_phi[jj, i], 0 ]');
+    }
+    z[i, b[i]:l[i]] = ones_int_array(l[i] - b[i] + 1);
+  }
+  
+  // augmented
+  int ii = 0;
+  for (i in (I + 1):I_all) {
+    ii += 1;
+    int w = latent_rng(lp.2[:, ii]) - 1;
+    if (w) {
+      b[i] = latent_rng(lp.6[:, ii]);
+      z[i, b[i]] = 1;
+      if (b[i] < J) {
+        z[i, J] = latent_rng(lp.4[ii, b[i]][:, J]);
+        for (j in (b[i] + 1):(J - 1)) {
+          int jj = J + b[i] - j;
+          z[i, jj] = (z[i, jj + 1] == 1) ?
+                      1 : latent_rng(lp.4[ii, b[i]][:, jj] 
+                                  + [ log1m_phi[jj, i], 0 ]');
+        }
+      }
+    }
+    N_super += w;
+    if (N_super == I_all) {
+      print("N_super == I + I_aug. Increase I_aug and try again.");
+    }
+  }
+  for (i in 1:I_all) {
+    if (b[i]) {
+      B[b[i]] += 1;
+      for (j in b[i]:J) {
+        N[j] += z[i, j] == 1;
+      }
+    }
+  }
+  
+  return (N, B, N_super);
+}

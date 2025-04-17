@@ -1,0 +1,286 @@
+/** 
+ * Cormack-Jolly-Seber pointwise log PMF using the forward algorithm.
+ * Function is overloaded:
+ *   1. Scalars phi and p
+ *   2. (J - 1)-vector phi and J-vector p
+ *   3. (J - 1) * I matrix phi and J * I matrix p
+ * 
+ * @param y     Detection history
+ * @param f, l  First and last survey detected
+ * @param phi   Survival probabilities
+ * @param p     Detection probabilities
+ 
+ * @return log_lik  Individual-level log likelihoods
+ */
+vector cjs(data array[,] int y, data array[] int f, data array[] int l, 
+           real phi, real p) {
+           
+  // parameters and log TPMs
+  int I = size(y), J = size(y[1]);
+  real log_phi = log(phi), log1m_phi = log1m(phi), 
+       log_p = log(p), log1m_p = log1m(p);
+  matrix[2, 2] P_z = [[ log_phi, log1m_phi ],
+                      [ negative_infinity(), 0 ]],
+               P_y = [[ log_p, log1m_p ],
+                      [ negative_infinity(), 0 ]];
+  
+  // forward algorithm
+  vector[2] Omega;
+  vector[I] log_lik;
+  for (i in 1:I) {
+    int n_surv = l[i] - f[i] + 1;
+    Omega[1] = log_phi * n_surv + sum(P_y[1, y[i, f[i]:l[i]]]);
+    Omega[2] = negative_infinity();
+    for (j in (l[i] + 1):J) {
+      Omega = log_prod_exp(P_z', Omega) + log1m_p;
+    }
+    log_lik[i] = log_sum_exp(Omega);
+  }
+  return log_lik;
+}
+
+vector cjs(data array[,] int y, data array[] int f, data array[] int l, 
+           vector phi, vector p) {
+  
+  // parameters and log TPMs
+  int I = size(y), J = size(y[1]);
+  vector[J - 1] log_phi = log(phi), log1m_phi = log1m(phi);
+  vector[J] log_p = log(p), log1m_p = log1m(p);
+  array[J - 1] matrix[2, 2] P_z;
+  for (j in 1:(J - 1)) {
+    P_z[j] = [[ log_phi[j], log1m_phi[j] ],
+              [ negative_infinity(), 0 ]];
+  }
+  array[J] matrix[2, 2] P_y;
+  for (j in 1:J) {
+    P_y[j] = [[ log_p[j], log1m_p[j] ],
+              [ 0, negative_infinity() ]];
+  }
+  
+  // forward algorithm
+  vector[2] Omega;
+  vector[I] log_lik;
+  for (i in 1:I) {
+    Omega[1] = 0;
+    for (j in (f[i] + 1):l[i]) {
+      Omega[1] += P_z[j - 1][1, 1] + P_y[j][1, y[i, j]];
+    }
+    Omega[2] = negative_infinity();
+    for (j in (l[i] + 1):J) {
+      Omega = log_prod_exp(P_z[j - 1]', Omega) + P_y[j][:, 1];
+    }
+    log_lik[i] = log_sum_exp(Omega);
+  }
+  return log_lik;
+}
+
+vector cjs(data array[,] int y, data array[] int f, data array[] int l, 
+           matrix phi, matrix p) {
+  
+  // parameters
+  int I = size(y), J = size(y[1]);
+  matrix[J - 1, I] log_phi = log(phi), log1m_phi = log1m(phi);
+  matrix[J, I] log_p = log(p), log1m_p = log1m(p);
+  
+  // log TPMs and forward algorithm
+  array[J - 1] matrix[2, 2] P_z;
+  array[J] matrix[2, 2] P_y;
+  vector[2] Omega;
+  vector[I] log_lik;
+  for (i in 1:I) {
+    for (j in 1:(J - 1)) {
+      P_z[j] = [[ log_phi[j, i], log1m_phi[j, i] ],
+                [ negative_infinity(), 0 ]];
+    }
+    for (j in 1:J) {
+      P_y[j] = [[ log_p[j, i], log1m_p[j, i] ],
+                [ 0, negative_infinity() ]];
+    }
+    Omega[1] = 0;
+    for (j in (f[i] + 1):l[i]) {
+      Omega[1] += P_z[j - 1][1, 1] + P_y[j][1, y[i, j]];
+    }
+    Omega[2] = negative_infinity();
+    for (j in (l[i] + 1):J) {
+      Omega = log_prod_exp(P_z[j - 1]', Omega) + P_y[j][:, 1];
+    }
+    log_lik[i] = log_sum_exp(Omega);
+  }
+  return log_lik;
+}
+
+/** 
+ * Cormack-Jolly-Seber robust design pointwise log PMF using the forward
+ * algorithm. Function is overloaded:
+ *   1. (J - 1)-vector phi and J-vector p
+ *   2. (J - 1)-vector phi and K * J matrix p
+ *   3. (J - 1) * I matrix phi and I-array of K * J matrices p
+ * 
+ * @param y     Detection history
+ * @param f, l  First and last primary detected
+ * @param K     Number of secondaries
+ * @param f_k   First secondary detected
+ * @param phi   Survival probabilities
+ * @param p     Detection probabilities
+ 
+ * @return log_lik  Individual-level log likelihoods
+ */
+vector cjs_rd(data array[,,] int y, data array[] int f, data array[] int l, 
+              data array[] int K, data array[] int f_k, vector phi, vector p) {
+  
+  // parameters and log TPMs
+  int I = size(y), J = size(y[1]), K_max = max(K);
+  vector[J - 1] log_phi = log(phi), log1m_phi = log1m(phi);
+  vector[J] log_p = log(p), log1m_p = log1m(p);
+  array[J - 1] matrix[2, 2] P_z;
+  for (j in 1:(J - 1)) {
+    P_z[j] = [[ log_phi[j], log1m_phi[j] ],
+              [ negative_infinity(), 0 ]];
+  }
+  array[J] matrix[2, 2] P_y;
+  for (j in 1:J) {
+    P_y[j] = [[ log_p[j], log1m_p[j] ],
+              [ 0, negative_infinity() ]];
+  }
+  
+  // forward algorithm
+  vector[2] Omega;
+  vector[I] log_lik;
+  for (i in 1:I) {
+    Omega[1] = 0;
+    for (k in 1:K[f[i]]) {
+      if (k != f_k[i]) {
+        Omega[1] += P_y[f[i]][1, y[i, f[i], k]];
+      }
+    }
+    for (j in (f[i] + 1):l[i]) {
+      Omega[1] += P_z[j - 1][1, 1] + sum(P_y[j][1, y[i, j, 1:K[j]]]);
+    }
+    Omega[2] = negative_infinity();
+    for (j in (l[i] + 1):J) {
+      Omega = log_prod_exp(P_z[j - 1]', Omega) + P_y[j][:, 1] * K[j];
+    }
+    log_lik[i] = log_sum_exp(Omega);
+  }
+  return log_lik;
+}
+vector cjs_rd(data array[,,] int y, data array[] int f, data array[] int l, 
+              data array[] int K, data array[] int f_k, vector phi, matrix p) {
+  
+  // parameters and log TPMs
+  int I = size(y), J = size(y[1]), K_max = max(K);
+  vector[J - 1] log_phi = log(phi), log1m_phi = log1m(phi);
+  matrix[K_max, J] log_p = log(p), log1m_p = log1m(p);
+  array[J - 1] matrix[2, 2] P_z;
+  for (j in 1:(J - 1)) {
+    P_z[j] = [[ log_phi[j], log1m_phi[j] ],
+              [ negative_infinity(), 0 ]];
+  }
+  array[J, K_max] matrix[2, 2] P_y;
+  for (j in 1:J) {
+    for (k in 1:K[j]) {
+      P_y[j, k] = [[ log_p[k, j], log1m_p[k, j] ],
+                   [ 0, negative_infinity() ]];
+    }
+  }
+  
+  // forward algorithm
+  vector[2] Omega;
+  vector[I] log_lik;
+  for (i in 1:I) {
+    Omega[1] = 0;
+    for (k in 1:K[f[i]]) {
+      if (k != f_k[i]) {
+        Omega[1] += P_y[f[i], k][1, y[i, f[i], k]];
+      }
+    }
+    for (j in (f[i] + 1):l[i]) {
+      Omega[1] += P_z[j - 1][1, 1];
+      for (k in 1:K[j]) {
+        Omega[1] += P_y[j, k][1, y[i, j, k]];
+      }
+    }
+    Omega[2] = negative_infinity();
+    for (j in (l[i] + 1):J) {
+      Omega = log_prod_exp(P_z[j - 1]', Omega);
+      for (k in 1:K[j]) {
+        Omega += P_y[j, k][:, 1];
+      }
+    }
+    log_lik[i] = log_sum_exp(Omega);
+  }
+  return log_lik;
+}
+vector cjs_rd(data array[,,] int y, data array[] int f, data array[] int l, 
+              data array[] int K, data array[] int f_k, matrix phi, 
+              array[] matrix p) {
+  
+  // parameters
+  int I = size(y), J = size(y[1]), K_max = max(K);
+  matrix[J - 1, I] log_phi = log(phi), log1m_phi = log1m(phi);
+  array[I] matrix[K_max, J] log_p = log(p), log1m_p = log1m(p);
+  
+  // log TPMs and forward algorithm
+  vector[2] Omega;
+  vector[I] log_lik;
+  for (i in 1:I) {
+    array[J - 1] matrix[2, 2] P_z;
+    for (j in 1:(J - 1)) {
+      P_z[j] = [[ log_phi[j, i], log1m_phi[j, i] ],
+                [ negative_infinity(), 0 ]];
+    }
+    array[J, K_max] matrix[2, 2] P_y;
+    for (j in 1:J) {
+      for (k in 1:K[j]) {
+        P_y[j, k] = [[ log_p[i][k, j], log1m_p[i][k, j] ],
+                     [ 0, negative_infinity() ]];
+      }
+    }
+    Omega[1] = 0;
+    for (k in 1:K[f[i]]) {
+      if (k != f_k[i]) {
+        Omega[1] += P_y[f[i], k][1, y[i, f[i], k]];
+      }
+    }
+    for (j in (f[i] + 1):l[i]) {
+      Omega[1] += P_z[j - 1][1, 1];
+      for (k in 1:K[j]) {
+        Omega[1] += P_y[j, k][1, y[i, j, k]];
+      }
+    }
+    Omega[2] = negative_infinity();
+    for (j in (l[i] + 1):J) {
+      Omega = log_prod_exp(P_z[j - 1]', Omega);
+      for (k in 1:K[j]) {
+        Omega += P_y[j, k][:, 1];
+      }
+    }
+    log_lik[i] = log_sum_exp(Omega);
+  }
+  return log_lik;
+}
+
+/** 
+ * Get secondary of first detection in primary of first detection for robust
+ * design Cormack-Jolly-Seber
+ *
+ * @param y  Detection history
+ * @param K  Number of secondaries
+ * @param f  First primary detected
+ *
+ * @return    First secondary detected in first primary
+ */
+array[] int first_sec(data array[,,] int y, data array[] int K, 
+                      data array[] int f) {
+  int I = size(y);
+  array[I] int f_k = zeros_int_array(I);
+  for (i in 1:I) {
+    for (k in 1:K[f[i]]) {
+      if (y[i, f[i], k] == 1) {
+        f_k[i] = k;
+        break;
+      }
+    }
+  }
+  return f_k;
+}

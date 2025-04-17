@@ -1,0 +1,54 @@
+/** 
+ * Sample latent discrete parameters
+ *
+ * @param A  Vector of unnormalised probabilities
+ * @return   Categorical outcome
+ */
+int latent_rng(vector A) {
+  return categorical_rng(softmax(A));
+}
+
+/**
+ * Return the natural logarithm of the product of the element-wise 
+ * exponentiation of the specified matrices
+ *
+ * @param A  First matrix or (row_)vector
+ * @param B  Second matrix or (row_)vector
+ *
+ * @return   log(exp(A) * exp(B))
+ */
+matrix log_prod_exp(matrix A, matrix B) {
+  int I = rows(A);
+  int J = cols(A);
+  int K = cols(B);
+  matrix[J, I] A_tr = A';
+  matrix[I, K] C;
+  for (k in 1:K) {
+    for (i in 1:I) {
+      C[i, k] = log_sum_exp(A_tr[:, i] + B[:, k]);
+    }
+  }
+  return C;
+}
+vector log_prod_exp(matrix A, vector B) {
+  int I = rows(A);
+  int J = cols(A);
+  matrix[J, I] A_tr = A';
+  vector[I] C;
+  for (i in 1:I) {
+    C[i] = log_sum_exp(A_tr[:, i] + B);
+  }
+  return C;
+}
+row_vector log_prod_exp(row_vector A, matrix B) {
+  int K = cols(B);
+  vector[size(A)] A_tr = A';
+  row_vector[K] C;
+  for (k in 1:K) {
+    C[k] = log_sum_exp(A_tr + B[:, k]);
+  }
+  return C;
+}
+real log_prod_exp(row_vector A, vector B) {
+  return log_sum_exp(A' + B);
+}
